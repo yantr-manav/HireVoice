@@ -153,16 +153,36 @@ function pickRecorderMime(): string {
   return "";
 }
 
-function speakText(text: string, lang: Language) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+function speakText(
+  text: string,
+  lang: Language,
+  onStart?: () => void,
+  onEnd?: () => void,
+) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    onEnd?.();
+    return;
+  }
   try {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === "hi" ? "hi-IN" : "en-IN";
-    utterance.rate = 1.02;
+    const targetLang = lang === "hi" ? "hi-IN" : "en-IN";
+    utterance.lang = targetLang;
+    utterance.rate = 1.0;
+
+    // Pick the clearest Indian English or Hindi voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferred =
+      voices.find((v) => v.lang.toLowerCase() === targetLang.toLowerCase()) ??
+      voices.find((v) => v.lang.toLowerCase().startsWith(lang === "hi" ? "hi" : "en"));
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onstart = () => onStart?.();
+    utterance.onend = () => onEnd?.();
+    utterance.onerror = () => onEnd?.();
     window.speechSynthesis.speak(utterance);
   } catch {
-    /* non-fatal */
+    onEnd?.();
   }
 }
 
@@ -235,6 +255,8 @@ export function BoothExperience({
   const [speechAvailable, setSpeechAvailable] = useState(true);
   const [paused, setPaused] = useState(false);
   const [voicePromptsOn, setVoicePromptsOn] = useState(true);
+  const [aiSpeaking, setAiSpeaking] = useState(false);
+  const [captionError, setCaptionError] = useState<string | null>(null);
   const [microFeedback, setMicroFeedback] = useState<string | null>(null);
 
   // Angry Customer Role-Play state
@@ -264,13 +286,20 @@ export function BoothExperience({
   const scenarioOpening =
     language === "hi" ? scenario.hi : language === "hinglish" ? scenario.hinglish : scenario.en;
 
+  // Pre-load browser speech synthesis voices on mount
+  useEffect(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+    }
+  }, []);
+
   // Speak standard question aloud when moving to a new question (interactive interviewer feel)
   useEffect(() => {
     if (stage !== "interview" || textMode || !voicePromptsOn) return;
     if (question.kind === "standard") {
       const qText =
         language === "hi" ? question.hi : language === "hinglish" ? question.hinglish : question.en;
-      speakText(qText, language);
+      speakText(qText, language, () => setAiSpeaking(true), () => setAiSpeaking(false));
     }
   }, [stage, index, question, language, textMode, voicePromptsOn]);
 
@@ -278,7 +307,9 @@ export function BoothExperience({
   useEffect(() => {
     if (stage === "interview" && question.kind === "roleplay" && roleplayTurns.length === 0) {
       setRoleplayTurns([{ role: "customer", text: scenarioOpening, mood: "upset" }]);
-      if (!textMode && voicePromptsOn) speakText(scenarioOpening, language);
+      if (!textMode && voicePromptsOn) {
+        speakText(scenarioOpening, language, () => setAiSpeaking(true), () => setAiSpeaking(false));
+      }
     }
   }, [stage, question.kind, roleplayTurns.length, scenarioOpening, language, textMode, voicePromptsOn]);
 
@@ -308,6 +339,7 @@ export function BoothExperience({
     setLiveText("");
     setInterimText("");
     setTypedDraft("");
+    setCaptionError(null);
     setMicroFeedback(null);
     finalRef.current = "";
     interimRef.current = "";
@@ -319,72 +351,81 @@ export function BoothExperience({
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
+      setAiSpeaking(false);
     }
 
-    if (!textMode) {
-      await start();
+    if (textMode) return;
 
-      // Start MediaRecorder for Gemini multimodal fallback when browser captions aren't available
+    // Start Web Speech Recognition FIRST (synchronously inside click gesture) so
+    // Chrome / Android never lose gesture context or suffer mic contention with
+    // a second getUserMedia stream!
+    const recognition = getRecognition(language);
+    if (recognition) {
+      setSpeechAvailable(true);
+      recognition.onresult = (event) => {
+        let finalAccum = finalRef.current;
+        let interimAccum = "";
+        for (let resultIndex = event.resultIndex; resultIndex < event.results.length; resultIndex += 1) {
+          const result = event.results[resultIndex];
+          const chunk = result[0]?.transcript ?? "";
+          if (result.isFinal) {
+            finalAccum = `${finalAccum} ${chunk}`.trim();
+          } else {
+            interimAccum = `${interimAccum} ${chunk}`.trim();
+          }
+        }
+        finalRef.current = finalAccum;
+        interimRef.current = interimAccum;
+        setLiveText(finalAccum);
+        setInterimText(interimAccum);
+      };
+      recognition.onerror = (ev) => {
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+          setCaptionError("Microphone permission blocked — allow mic access or type below.");
+        } else if (ev.error === "audio-capture") {
+          setCaptionError("No microphone detected — check your mic or type below.");
+        }
+      };
+      recognition.onend = () => {
+        if (answeringRef.current && !pausedRef.current && recognitionRef.current === recognition) {
+          try {
+            recognition.start();
+          } catch {
+            /* ignore restart race */
+          }
+        }
+      };
+      recognitionRef.current = recognition;
       try {
-        if (navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined") {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const mime = pickRecorderMime();
-          const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-          recorder.ondataavailable = (ev) => {
-            if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
-          };
-          recorder.onstop = () => {
-            stream.getTracks().forEach((t) => t.stop());
-          };
-          recorder.start(250);
-          mediaRecorderRef.current = recorder;
-        }
+        recognition.start();
       } catch {
-        /* fallback to Web Speech or typed input */
-      }
-
-      // Real-time word-by-word live captions (renders BOTH final + interim immediately
-      // and auto-restarts across Chrome pauses while candidate is still answering).
-      const recognition = getRecognition(language);
-      if (recognition) {
-        setSpeechAvailable(true);
-        recognition.onresult = (event) => {
-          let finalAccum = finalRef.current;
-          let interimAccum = "";
-          for (let resultIndex = event.resultIndex; resultIndex < event.results.length; resultIndex += 1) {
-            const result = event.results[resultIndex];
-            const chunk = result[0]?.transcript ?? "";
-            if (result.isFinal) {
-              finalAccum = `${finalAccum} ${chunk}`.trim();
-            } else {
-              interimAccum = `${interimAccum} ${chunk}`.trim();
-            }
-          }
-          finalRef.current = finalAccum;
-          interimRef.current = interimAccum;
-          setLiveText(finalAccum);
-          setInterimText(interimAccum);
-        };
-        recognition.onerror = () => {};
-        recognition.onend = () => {
-          // Keep live captions running continuously until candidate presses Done.
-          if (answeringRef.current && !pausedRef.current && recognitionRef.current === recognition) {
-            try {
-              recognition.start();
-            } catch {
-              /* ignore restart race */
-            }
-          }
-        };
-        recognitionRef.current = recognition;
-        try {
-          recognition.start();
-        } catch {
-          setSpeechAvailable(false);
-        }
-      } else {
         setSpeechAvailable(false);
       }
+      // Run mic amplitude visualizer without opening a competing MediaRecorder
+      void start();
+      return;
+    }
+
+    // Fallback path for browsers without Web Speech (e.g. iOS Safari / Firefox):
+    // capture audio via MediaRecorder and transcribe via Gemini multimodal API.
+    setSpeechAvailable(false);
+    await start();
+    try {
+      if (navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined") {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = pickRecorderMime();
+        const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        recorder.ondataavailable = (ev) => {
+          if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+        };
+        recorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+        };
+        recorder.start(250);
+        mediaRecorderRef.current = recorder;
+      }
+    } catch {
+      setCaptionError("Could not access microphone — you can type your answer below.");
     }
   }, [language, start, textMode]);
 
@@ -617,7 +658,9 @@ export function BoothExperience({
           },
         ];
         setRoleplayTurns(updated);
-        if (!textMode) speakText(replyText, language);
+        if (!textMode && voicePromptsOn) {
+          speakText(replyText, language, () => setAiSpeaking(true), () => setAiSpeaking(false));
+        }
 
         if (data.done || candidateTurnCount >= 3) {
           setRoleplayDone(true);
@@ -1273,7 +1316,15 @@ export function BoothExperience({
                       <Volume2 className="h-3 w-3 text-glow" />
                     </span>
                     <div>
-                      <p className="text-[10px] font-medium text-mist/75">Vaani</p>
+                      <p className="flex items-center gap-1.5 text-[10px] font-medium text-mist/80">
+                        Vaani
+                        {aiSpeaking ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-glow/20 px-1.5 py-0.5 font-mono text-[8px] text-glow">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-glow" />
+                            Speaking…
+                          </span>
+                        ) : null}
+                      </p>
                       <p className="font-mono text-[8px] text-mist/35">interviewer</p>
                     </div>
                     <span className="ml-auto flex items-center gap-1.5">
@@ -1282,7 +1333,7 @@ export function BoothExperience({
                         onClick={() => {
                           const qText =
                             language === "hi" ? question.hi : language === "hinglish" ? question.hinglish : question.en;
-                          speakText(qText, language);
+                          speakText(qText, language, () => setAiSpeaking(true), () => setAiSpeaking(false));
                         }}
                         className="rounded-[4px] border border-white/12 px-2 py-0.5 font-mono text-[8.5px] text-mist/65 hover:border-glow/50 hover:text-mist"
                       >
@@ -1377,6 +1428,9 @@ export function BoothExperience({
                                 </span>
                               ) : null}
                             </p>
+                            {captionError ? (
+                              <p className="mt-1 text-[10px] text-[#ff9db1]">{captionError}</p>
+                            ) : null}
                           </div>
                         </div>
                       ) : null}
