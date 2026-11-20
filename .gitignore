@@ -1,0 +1,21 @@
+node_modules
+.next
+out
+coverage
+.vercel
+.data
+*.db
+*.db-shm
+*.db-wal
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+
+# Environment & credentials (never commit secrets)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+service-account*.json
