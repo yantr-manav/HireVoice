@@ -46,12 +46,12 @@ import { cn } from "@/lib/utils";
 
 const coreNav = [
   { href: "/app", label: "Home", icon: Home },
+  { href: "/app/voice", label: "Voice", icon: AudioLines },
   { href: "/app/drive", label: "Drive Mode", icon: QrCode },
   { href: "/app/roles", label: "Roles", icon: BriefcaseBusiness },
   { href: "/app/review", label: "Review", icon: ClipboardCheck },
   { href: "/app/playbooks", label: "Playbooks", icon: FileText },
   { href: "/app/upload-call", label: "Upload Call", icon: UploadCloud },
-  { href: "/app/voice", label: "Voice", icon: AudioLines },
   { href: "/app/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/app/analytics", label: "Analytics", icon: BarChart3 },
 ];
