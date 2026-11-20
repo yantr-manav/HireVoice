@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /$
+Allow: /demo
+Allow: /practice
+Disallow: /app
+Disallow: /i/
+Disallow: /r/
+Disallow: /api/
+Disallow: /auth/
