@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/server";
-import { DEMO_COOKIE } from "@/lib/viewer";
+import { DEMO_COOKIE, GOOGLE_SESSION_COOKIE } from "@/lib/viewer";
 
 export async function POST(request: Request) {
   if (isSupabaseConfigured()) {
@@ -13,5 +13,6 @@ export async function POST(request: Request) {
   }
   const response = NextResponse.redirect(new URL("/", request.url));
   response.cookies.delete(DEMO_COOKIE);
+  response.cookies.delete(GOOGLE_SESSION_COOKIE);
   return response;
 }

@@ -8,6 +8,7 @@ import { VoiceOrb } from "@/components/voice/voice-orb";
 import { getViewer } from "@/lib/viewer";
 import { isSupabaseConfigured } from "@/lib/supabase/server";
 import { supabaseCredentials } from "@/lib/supabase/config";
+import { googleConfigured } from "@/lib/config";
 
 /** Supabase reports which external providers are enabled for this project. */
 async function googleProviderEnabled(): Promise<boolean> {
@@ -88,7 +89,12 @@ export default async function SignInPage({
           </Link>
         </div>
         <div className="flex flex-1 items-center justify-center px-5 pb-12 pt-6 sm:px-10">
-          <SignInForm configured={configured} googleEnabled={googleEnabled} next={next} />
+          <SignInForm
+            configured={configured}
+            googleEnabled={googleEnabled}
+            googleDirectEnabled={googleConfigured}
+            next={next}
+          />
         </div>
         <div className="hidden items-center justify-between border-t border-rule px-6 py-3 text-[10px] text-slate lg:flex">
           <span>© 2026 Hirevoice</span>

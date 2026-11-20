@@ -34,10 +34,12 @@ type Mode = "idle" | "google" | "email" | "password" | "sent";
 export function SignInForm({
   configured,
   googleEnabled = false,
+  googleDirectEnabled = false,
   next = "/app",
 }: {
   configured: boolean;
   googleEnabled?: boolean;
+  googleDirectEnabled?: boolean;
   next?: string;
 }) {
   const router = useRouter();
@@ -55,25 +57,35 @@ export function SignInForm({
 
   const google = async () => {
     setError(null);
-    if (!configured) {
-      setError("Add your Supabase URL and publishable key to .env to enable Google sign-in.");
+    if (googleEnabled && configured) {
+      setMode("google");
+      try {
+        const supabase = createClient();
+        const { error: authError } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: redirectTo(),
+            queryParams: { access_type: "offline", prompt: "consent" },
+          },
+        });
+        if (authError) throw authError;
+        return;
+      } catch (caught) {
+        setMode("idle");
+        setError(caught instanceof Error ? caught.message : "Google sign-in could not start.");
+        return;
+      }
+    }
+
+    if (googleDirectEnabled) {
+      setMode("google");
+      window.location.href = `/api/auth/google?next=${encodeURIComponent(next)}`;
       return;
     }
-    setMode("google");
-    try {
-      const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: redirectTo(),
-          queryParams: { access_type: "offline", prompt: "consent" },
-        },
-      });
-      if (authError) throw authError;
-    } catch (caught) {
-      setMode("idle");
-      setError(caught instanceof Error ? caught.message : "Google sign-in could not start.");
-    }
+
+    setError(
+      "Google sign-in needs either Supabase Google OAuth enabled or GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in your environment.",
+    );
   };
 
   const passwordAuth = async (event: React.FormEvent) => {
@@ -206,31 +218,25 @@ export function SignInForm({
         Review evidence, make the call, and keep every decision human-owned.
       </p>
 
-      {googleEnabled ? (
-        <>
-          <div className="mt-7 space-y-2.5">
-            <Button
-              variant="outline"
-              size="lg"
-              className="w-full justify-start bg-white px-4"
-              onClick={google}
-              disabled={busy}
-            >
-              {mode === "google" ? <Loader2 className="h-4 w-4 animate-spin" /> : <GoogleGlyph />}
-              Continue with Google
-              <ArrowRight className="ml-auto h-3.5 w-3.5 text-slate" />
-            </Button>
-          </div>
+      <div className="mt-7 space-y-2.5">
+        <Button
+          variant="outline"
+          size="lg"
+          className="w-full justify-start bg-white px-4 shadow-xs hover:border-ink/40"
+          onClick={google}
+          disabled={busy}
+        >
+          {mode === "google" ? <Loader2 className="h-4 w-4 animate-spin" /> : <GoogleGlyph />}
+          Continue with Google
+          <ArrowRight className="ml-auto h-3.5 w-3.5 text-slate" />
+        </Button>
+      </div>
 
-          <div className="my-6 flex items-center gap-3">
-            <span className="h-px flex-1 bg-rule" />
-            <span className="text-[10.5px] text-slate">or use email</span>
-            <span className="h-px flex-1 bg-rule" />
-          </div>
-        </>
-      ) : (
-        <div className="mt-7" />
-      )}
+      <div className="my-6 flex items-center gap-3">
+        <span className="h-px flex-1 bg-rule" />
+        <span className="text-[10.5px] text-slate">or use work email</span>
+        <span className="h-px flex-1 bg-rule" />
+      </div>
 
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-[7px] border border-rule bg-white/70 p-1">
         {(["signin", "signup"] as const).map((value) => (
