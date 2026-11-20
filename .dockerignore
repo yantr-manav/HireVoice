@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.gitignore
+npm-debug.log*
+README.md
+docs
+Hirevoice_Spec_v2
+Hirevoice_*.md
+.env
+.env.*
+!.env.example
+supabase
+Dockerfile
+.dockerignore
+cloudbuild.yaml

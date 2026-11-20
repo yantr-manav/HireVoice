@@ -1,0 +1,67 @@
+# Hirevoice · Cloud Build → Cloud Run (asia-south1)
+#
+# One-time setup, from the repository root:
+#   gcloud artifacts repositories create hirevoice \
+#     --repository-format=docker --location=asia-south1
+#
+# Build and deploy:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_SUPABASE_URL="https://xxx.supabase.co",_SUPABASE_PUBLISHABLE_KEY="sb_publishable_...",_SUPABASE_ANON_KEY="eyJ..."
+#
+# The Supabase URL, publishable key and anon key are public client values. They
+# are baked into the bundle at build time because Next.js inlines
+# NEXT_PUBLIC_* variables. The service-role key and DATABASE_URL are server
+# secrets: add them after deployment as Secret Manager references (see
+# docs/deploy-cloud-run.md).
+
+substitutions:
+  _REGION: asia-south1
+  _SERVICE: hirevoice
+  _SUPABASE_URL: ""
+  _SUPABASE_PUBLISHABLE_KEY: ""
+  _SUPABASE_ANON_KEY: ""
+  _SITE_URL: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=NEXT_PUBLIC_SUPABASE_URL=${_SUPABASE_URL}
+      - --build-arg=NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${_SUPABASE_PUBLISHABLE_KEY}
+      - --build-arg=NEXT_PUBLIC_SUPABASE_ANON_KEY=${_SUPABASE_ANON_KEY}
+      - --build-arg=NEXT_PUBLIC_SITE_URL=${_SITE_URL}
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/hirevoice/app:$SHORT_SHA
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/hirevoice/app:$SHORT_SHA
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/hirevoice/app:$SHORT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=1Gi
+      - --min-instances=0
+      - --max-instances=4
+      - --timeout=300
+      - --set-env-vars=NEXT_PUBLIC_SUPABASE_URL=${_SUPABASE_URL},NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${_SUPABASE_PUBLISHABLE_KEY},NEXT_PUBLIC_SUPABASE_ANON_KEY=${_SUPABASE_ANON_KEY},NEXT_PUBLIC_SITE_URL=${_SITE_URL}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/hirevoice/app:$SHORT_SHA
