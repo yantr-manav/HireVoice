@@ -28,6 +28,7 @@ import { cn, formatTime } from "@/lib/utils";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { useMicLevel } from "@/components/voice/use-mic-level";
+import { LiveWaveform } from "@/components/voice/live-waveform";
 import { pickLivenessPhrase } from "@/lib/scoring/verify";
 import type { Candidate, CandidateLogistics, Language, TranscriptSegment } from "@/lib/types";
 
@@ -279,7 +280,16 @@ export function BoothExperience({
   const pausedRef = useRef(false);
   answeringRef.current = answering;
   pausedRef.current = paused;
-  const { status, level, error, start, stop } = useMicLevel({ smoothing: 0.8 });
+  const {
+    status,
+    peak,
+    micVerified,
+    deviceLabel,
+    barsRef,
+    error,
+    start,
+    stop,
+  } = useMicLevel({ smoothing: 0.62 });
 
   const question = questions[Math.min(index, questions.length - 1)];
   const scenario = SCENARIOS.find((s) => s.id === scenarioId) ?? SCENARIOS[0];
@@ -436,7 +446,8 @@ export function BoothExperience({
     answeringRef.current = false;
     recognitionRef.current?.stop();
     recognitionRef.current = null;
-    stop();
+    // Keep the mic warm across questions so clicking Answer on the next question
+    // is < 30ms instant instead of re-opening getUserMedia every time.
 
     const combinedSpeech = `${finalRef.current} ${interimRef.current}`.trim();
     const browserTranscript = (typedDraft || combinedSpeech || liveText).trim();
@@ -498,6 +509,7 @@ export function BoothExperience({
 
   const submitFullInterview = useCallback(
     async (finalAnswers: Answer[], finalRoleplay: RoleplayTurn[]) => {
+      stop(); // Release microphone once all answers are captured
       if (practice) {
         setStage("done");
         return;
@@ -1034,44 +1046,41 @@ export function BoothExperience({
 
               <div className="mt-4 overflow-hidden rounded-[10px] border border-white/12 bg-booth-2/60">
                 <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-                  <span className="flex items-center gap-1.5 text-[9.5px] text-mist/60">
+                  <span className="flex items-center gap-1.5 text-[9.5px] text-mist/70">
                     <Mic className={cn("h-3 w-3", status === "live" ? "text-glow" : "text-mist/40")} />
-                    {status === "live" ? "Microphone live" : "Microphone off"}
+                    {status === "live"
+                      ? deviceLabel
+                        ? `Live · ${deviceLabel.slice(0, 32)}`
+                        : "Microphone live"
+                      : "Microphone off"}
                   </span>
                   <span
                     className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      status === "live" ? (level > 0.03 ? "bg-verified" : "bg-flag") : "bg-mist/20",
+                      "rounded-full px-2 py-0.5 font-mono text-[8.5px] font-medium",
+                      micVerified
+                        ? "bg-verified/20 text-[#7ee2b8]"
+                        : status === "live"
+                          ? "bg-glow/15 text-glow"
+                          : "bg-white/10 text-mist/40",
                     )}
-                  />
+                  >
+                    {micVerified
+                      ? `✓ WORKING (${Math.min(100, Math.round(peak * 100))}%)`
+                      : status === "live"
+                        ? "LISTENING…"
+                        : "IDLE"}
+                  </span>
                 </div>
-                <div className="flex h-[100px] items-center justify-center gap-[3px] px-4">
-                  {Array.from({ length: 33 }).map((_, barIndex) => {
-                    const base = [0.2, 0.35, 0.55, 0.8, 0.6, 0.9, 0.7, 0.45, 0.3][barIndex % 9];
-                    return (
-                      <span
-                        key={barIndex}
-                        className={cn(
-                          "w-[3px] rounded-full transition-all duration-100",
-                          status === "live" && level > 0.02 ? "bg-glow" : "bg-mist/15",
-                        )}
-                        style={{
-                          height: `${Math.max(
-                            4,
-                            base * 72 * (status === "live" ? 0.2 + Math.min(1.6, level * 3) : 0.35),
-                          )}px`,
-                        }}
-                      />
-                    );
-                  })}
+                <div className="px-4 py-3">
+                  <LiveWaveform barsRef={barsRef} active={status === "live"} height={88} />
                 </div>
-                <div className="flex items-center justify-between border-t border-white/10 px-3 py-2">
-                  <span className="text-[9.5px] text-mist/45">
-                    {status === "live"
-                      ? level > 0.03
-                        ? "Loud and clear."
-                        : "Speak normally to test."
-                      : "Use headphones in a noisy room."}
+                <div className="flex items-center justify-between border-t border-white/10 px-3 py-2.5">
+                  <span className={cn("text-[10px]", micVerified ? "font-medium text-[#7ee2b8]" : "text-mist/55")}>
+                    {micVerified
+                      ? "✓ Microphone verified — loud and clear. Ready to start!"
+                      : status === "live"
+                        ? "Say a short sentence in your normal voice to verify your mic…"
+                        : "Tap Test mic to verify your microphone works cleanly."}
                   </span>
                   {status === "live" ? (
                     <Button variant="ghost" size="sm" className="text-mist/65 hover:bg-white/10" onClick={stop}>
@@ -1396,20 +1405,11 @@ export function BoothExperience({
                     <>
                       {!textMode && answering ? (
                         <div className="mb-2.5 space-y-2">
-                          <div className="flex h-7 items-end gap-[2px]" aria-hidden="true">
-                            {Array.from({ length: 42 }).map((_, barIndex) => {
-                              const base = [0.2, 0.4, 0.7, 0.9, 0.55, 0.8, 0.35][barIndex % 7];
-                              return (
-                                <span
-                                  key={barIndex}
-                                  className="w-[2px] rounded-full bg-glow/80 transition-all duration-100"
-                                  style={{
-                                    height: `${Math.max(3, base * 26 * (0.25 + (paused ? 0 : Math.min(1.6, level * 3))))}px`,
-                                  }}
-                                />
-                              );
-                            })}
-                          </div>
+                          <LiveWaveform
+                            barsRef={barsRef}
+                            active={answering && !paused && status === "live"}
+                            height={44}
+                          />
                           <div className="rounded-[7px] border border-glow/25 bg-glow/8 px-3 py-2">
                             <p className="flex items-center gap-1.5 font-mono text-[8.5px] uppercase tracking-[0.08em] text-glow">
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-glow" />
