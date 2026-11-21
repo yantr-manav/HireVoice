@@ -54,19 +54,19 @@ function modelList(value: string | undefined, fallback: string[]): string[] {
  */
 export const aiModels = {
   fast: modelList(process.env.AI_MODEL_FAST, [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
   ]),
   deep: modelList(process.env.AI_MODEL_DEEP, [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
     "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
   ]),
   small: modelList(process.env.AI_MODEL_SMALL, [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
   ]),
   gemma: modelList(process.env.AI_MODEL_GEMMA, [
     "gemma-3-27b-it",
@@ -74,12 +74,12 @@ export const aiModels = {
     "gemma-3-4b-it",
   ]),
   command: modelList(process.env.AI_MODEL_COMMAND, [
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemma-3-27b-it",
   ]),
   live: modelList(process.env.AI_MODEL_LIVE, [
+    "gemini-3.8-live",
     "gemini-2.5-flash-preview-native-audio-dialog",
     "gemini-2.0-flash-live-001",
   ]),

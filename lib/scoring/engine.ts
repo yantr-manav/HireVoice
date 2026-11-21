@@ -99,7 +99,7 @@ export async function transcribeAudioWithGemini(input: {
     for (const entry of ordered.slice(0, 2)) {
       const started = Date.now();
       try {
-        const ai = new GoogleGenAI({ apiKey: entry.key });
+        const ai = new GoogleGenAI({ apiKey: entry.key, httpOptions: { apiVersion: "v1beta" } });
         const response = await ai.models.generateContent({
           model,
           contents: [
@@ -530,9 +530,9 @@ export async function nextRoleplayTurn(input: {
     const res = await generateJson<{ reply: string; mood?: "upset" | "calming" | "resolved" }>({
       prompt: `Conversation so far (turn ${input.turnNumber} of ${maxTurns}):\n${transcript}\n\nRespond dynamically as the Customer:`,
       system,
-      model: [...aiModels.fast, ...aiModels.small, ...aiModels.gemma],
+      model: [...aiModels.small, ...aiModels.fast, ...aiModels.gemma],
       temperature: 0.7,
-      maxOutputTokens: 600,
+      maxOutputTokens: 1200,
       maxAttempts: 6,
     });
     if (res?.data?.reply) {

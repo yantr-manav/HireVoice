@@ -88,17 +88,17 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       attempts += 1;
       const started = Date.now();
       try {
-        const ai = new GoogleGenAI({ apiKey: entry.key });
-        const isThinking25 = model.startsWith("gemini-2.5-");
+        const ai = new GoogleGenAI({ apiKey: entry.key, httpOptions: { apiVersion: "v1beta" } });
+        const isThinking = model.startsWith("gemini-2.5-") || model.startsWith("gemini-3.");
         const response = await ai.models.generateContent({
           model,
           contents: options.prompt,
           config: {
             systemInstruction: options.system,
             temperature: options.temperature ?? 0.4,
-            maxOutputTokens: Math.max(options.maxOutputTokens ?? 1200, options.json ? 512 : 256),
+            maxOutputTokens: Math.max(options.maxOutputTokens ?? 1600, options.json ? 1200 : 400),
             ...(options.json ? { responseMimeType: "application/json" } : {}),
-            ...(isThinking25 && options.json ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+            ...(isThinking && options.json ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
           },
         });
 

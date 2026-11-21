@@ -367,9 +367,13 @@ export function BoothExperience({
 
     if (textMode) return;
 
-    // Start Web Speech Recognition FIRST (synchronously inside click gesture) so
-    // Chrome / Android never lose gesture context or suffer mic contention with
-    // a second getUserMedia stream!
+    // IMPORTANT: Release any active getUserMedia stream from Mic Check FIRST!
+    // On Windows & Android Chrome, holding getUserMedia open simultaneously with
+    // webkitSpeechRecognition causes Chrome's speech recognizer to miss audio or
+    // fail silently. Giving SpeechRecognition exclusive mic access makes live
+    // captions instant and reliable (matching Vaani's voice desk).
+    stop();
+
     const recognition = getRecognition(language);
     if (recognition) {
       setSpeechAvailable(true);
@@ -389,12 +393,22 @@ export function BoothExperience({
         interimRef.current = interimAccum;
         setLiveText(finalAccum);
         setInterimText(interimAccum);
+
+        // Pulse the canvas waveform smoothly on every recognized speech event
+        const bars = barsRef.current;
+        if (bars) {
+          for (let i = 0; i < bars.length; i += 1) {
+            bars[i] = Math.min(1, 0.25 + Math.random() * 0.65);
+          }
+        }
       };
       recognition.onerror = (ev) => {
         if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-          setCaptionError("Microphone permission blocked — allow mic access or type below.");
+          setCaptionError("Microphone permission blocked — allow mic access or switch to Type.");
         } else if (ev.error === "audio-capture") {
-          setCaptionError("No microphone detected — check your mic or type below.");
+          setCaptionError("No microphone detected — check your mic or switch to Type.");
+        } else if (ev.error === "network") {
+          setCaptionError("Browser speech service unreachable — switch to Type.");
         }
       };
       recognition.onend = () => {
@@ -412,8 +426,6 @@ export function BoothExperience({
       } catch {
         setSpeechAvailable(false);
       }
-      // Run mic amplitude visualizer without opening a competing MediaRecorder
-      void start();
       return;
     }
 
@@ -1373,8 +1385,8 @@ export function BoothExperience({
 
               {/* Answer Capture Card */}
               <div className="mt-3 flex-1 rounded-[10px] border border-white/10 bg-booth/45 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-[0.08em] text-mist/45">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-[0.08em] text-mist/55">
                     <span
                       className={cn(
                         "h-1.5 w-1.5 rounded-full",
@@ -1388,12 +1400,49 @@ export function BoothExperience({
                           ? "Paused"
                           : textMode
                             ? "Type your response"
-                            : "Listening & recording"
+                            : "Listening live"
                         : roleplayDone && question.kind === "roleplay"
                           ? "Role-play complete"
                           : "Your answer"}
                   </span>
-                  {answering ? <span className="font-mono text-[9px] text-mist/40">{formatTime(elapsed)}</span> : null}
+
+                  <div className="flex items-center gap-2">
+                    {answering ? <span className="font-mono text-[9px] text-mist/40">{formatTime(elapsed)}</span> : null}
+                    {/* Always-accessible Voice ↔ Type segmented toggle */}
+                    <div className="inline-flex rounded-[5px] border border-white/12 bg-booth-2/70 p-0.5 text-[9px]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTextMode(false);
+                          setCaptionError(null);
+                        }}
+                        className={cn(
+                          "flex items-center gap-1 rounded-[4px] px-2 py-0.5 transition",
+                          !textMode ? "bg-glow/25 font-medium text-mist" : "text-mist/45 hover:text-mist/80",
+                        )}
+                      >
+                        <Mic className="h-2.5 w-2.5" />
+                        Voice
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          answeringRef.current = false;
+                          recognitionRef.current?.stop();
+                          recognitionRef.current = null;
+                          setAnswering(false);
+                          setTextMode(true);
+                        }}
+                        className={cn(
+                          "flex items-center gap-1 rounded-[4px] px-2 py-0.5 transition",
+                          textMode ? "bg-glow/25 font-medium text-mist" : "text-mist/45 hover:text-mist/80",
+                        )}
+                      >
+                        <Keyboard className="h-2.5 w-2.5" />
+                        Type
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-2.5 min-h-[100px]">
@@ -1408,7 +1457,7 @@ export function BoothExperience({
                         <div className="mb-2.5 space-y-2">
                           <LiveWaveform
                             barsRef={barsRef}
-                            active={answering && !paused && status === "live"}
+                            active={answering && !paused}
                             height={44}
                           />
                           <div className="rounded-[7px] border border-glow/25 bg-glow/8 px-3 py-2">
@@ -1496,7 +1545,17 @@ export function BoothExperience({
                           {paused ? "Resume" : "Pause"}
                         </button>
                       ) : (
-                        <span className="text-[9.5px] text-mist/35">Accessibility text mode</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTextMode(false);
+                            void beginAnswer();
+                          }}
+                          className="flex items-center gap-1.5 text-[10px] font-medium text-glow hover:text-mist"
+                        >
+                          <Mic className="h-3 w-3" />
+                          Switch back to Voice
+                        </button>
                       )}
                       <Button
                         variant="booth"
