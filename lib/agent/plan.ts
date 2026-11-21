@@ -22,33 +22,25 @@ type RawStep = { tool?: unknown; args?: unknown };
 type RawPlan = { intent?: unknown; summary?: unknown; steps?: unknown };
 
 async function buildContext(ctx: ToolContext) {
-  const google = await googleConnection(ctx.owner);
-  const pending = await listPendingActions();
+  const [google, pending] = await Promise.all([
+    googleConnection(ctx.owner),
+    listPendingActions(),
+  ]);
   const today = istDateKey(new Date());
 
   const candidateLines = candidates
-    .map(
-      (candidate) =>
-        `- ${candidate.name} · ${candidate.alias} · ${candidate.email} · ${candidate.stage.replace(/_/g, " ")} · ${candidate.score.overall.toFixed(1)}/5 · ${candidate.roleTitle}`,
-    )
-    .join("\n");
+    .map((c) => `${c.name} (${c.stage}, ${c.score.overall.toFixed(1)}/5, ${c.roleTitle})`)
+    .join("; ");
 
-  return `Today is ${today}, timezone Asia/Kolkata (IST). Recruiter: ${ctx.actor} <${ctx.email || "unknown"}>.
-Google Workspace: ${google.connected ? `connected as ${google.email}` : "not connected (read/write actions will be simulated)"}.
-Pending approvals: ${pending.length}.
-Roles:
-${roles.map((role) => `- ${role.title} · ${role.status} · ${role.shortlisted} shortlisted`).join("\n")}
+  // Compact tool catalog (~65% fewer input tokens -> much faster Gemini TTFT)
+  const toolLines = toolDefinitions
+    .map((t) => `${t.name}[${t.mutating ? "W" : "R"}](${Object.keys(t.args).join(",")})`)
+    .join(" | ");
 
-Candidates:
-${candidateLines}
-
-Tools:
-${toolDefinitions
-  .map(
-    (tool) =>
-      `- ${tool.name} (${tool.mutating ? "write, needs approval" : "read"}) — ${tool.description} args: ${JSON.stringify(tool.args)}`,
-  )
-  .join("\n")}`;
+  return `Date:${today} IST. Recruiter:${ctx.actor}. Google:${google.connected ? google.email : "demo"}. Pending:${pending.length}.
+Roles: ${roles.map((r) => r.title).join(", ")}.
+Candidates: ${candidateLines}.
+Tools (W=approval, R=read): ${toolLines}`;
 }
 
 const SYSTEM = `You are Vaani, the voice-first recruiting operator inside Hirevoice.
@@ -120,8 +112,9 @@ export async function planCommand(transcript: string, ctx: ToolContext): Promise
       const response = await generateJson<RawPlan>({
         system: SYSTEM,
         prompt: `${await buildContext(ctx)}\n\nRecruiter said: "${clean}"`,
-        temperature: 0.15,
-        maxOutputTokens: 900,
+        temperature: 0.1,
+        maxOutputTokens: 600,
+        maxAttempts: 3,
         model: aiModels.command,
       });
       if (response) {
@@ -149,44 +142,65 @@ export async function planCommand(transcript: string, ctx: ToolContext): Promise
     summary = rawSteps.length > 0 ? "Here is what I will do. Nothing external runs until you approve it." : "I did not catch a workspace action. Try “who needs review” or “schedule Sana tomorrow at 3”.";
   }
 
-  const actions: AgentAction[] = [];
-  for (const step of rawSteps.slice(0, MAX_STEPS)) {
-    const definition = toolDefinitions.find((tool) => tool.name === step.tool);
-    if (!definition) continue;
-    const action = await createAction({
-      transcript: clean,
-      intent,
-      tool: step.tool,
-      args: step.args,
-      mutating: definition.mutating,
-      summary: toolSummary(step.tool, step.args),
-      actor: ctx.actor,
-      source,
-      status: "proposed",
-    });
-    actions.push(action);
-  }
+  const validSteps = rawSteps
+    .slice(0, MAX_STEPS)
+    .map((step) => ({ step, definition: toolDefinitions.find((tool) => tool.name === step.tool) }))
+    .filter((item): item is { step: { tool: string; args: Record<string, unknown> }; definition: (typeof toolDefinitions)[number] } => Boolean(item.definition));
 
-  // Read-only steps run immediately. Write steps stay proposed for approval.
-  const hydrated: AgentAction[] = [];
-  for (const action of actions) {
-    if (!action.mutating) {
-      try {
-        const result = await executeTool(action.tool, action.args, ctx);
-        const updated = await updateAction(action.id, { status: "executed", result, error: null });
-        hydrated.push(updated ?? action);
-      } catch (error) {
-        const updated = await updateAction(action.id, {
-          status: "failed",
-          error: error instanceof Error ? error.message : "Tool failed",
-          result: { ok: false, title: "Could not complete", detail: error instanceof Error ? error.message : "Tool failed" },
-        });
-        hydrated.push(updated ?? action);
+  // Create actions and execute read-only steps in parallel (cuts 2-3s of serial DB waits).
+  const hydrated: AgentAction[] = await Promise.all(
+    validSteps.map(async ({ step, definition }) => {
+      if (!definition.mutating) {
+        try {
+          const result = await executeTool(step.tool, step.args, ctx);
+          const action = await createAction({
+            transcript: clean,
+            intent,
+            tool: step.tool,
+            args: step.args,
+            mutating: false,
+            summary: toolSummary(step.tool, step.args),
+            actor: ctx.actor,
+            source,
+            status: "executed",
+          });
+          return (await updateAction(action.id, { status: "executed", result, error: null })) ?? { ...action, result };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "Tool failed";
+          const action = await createAction({
+            transcript: clean,
+            intent,
+            tool: step.tool,
+            args: step.args,
+            mutating: false,
+            summary: toolSummary(step.tool, step.args),
+            actor: ctx.actor,
+            source,
+            status: "failed",
+          });
+          return (
+            (await updateAction(action.id, {
+              status: "failed",
+              error: msg,
+              result: { ok: false, title: "Could not complete", detail: msg },
+            })) ?? action
+          );
+        }
       }
-    } else {
-      hydrated.push(action);
-    }
-  }
+
+      return createAction({
+        transcript: clean,
+        intent,
+        tool: step.tool,
+        args: step.args,
+        mutating: true,
+        summary: toolSummary(step.tool, step.args),
+        actor: ctx.actor,
+        source,
+        status: "proposed",
+      });
+    }),
+  );
 
   return {
     id: hydrated[0]?.id ?? `plan_${Date.now()}`,

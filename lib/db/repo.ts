@@ -234,23 +234,36 @@ export async function updateAction(
         ? JSON.stringify(patch.result)
         : null;
 
+  const nextStatus = patch.status ?? current.status;
+  const nextError = patch.error === undefined ? current.error : patch.error;
+  const nextSummary = patch.summary ?? current.summary;
+  const nextResultObj = patch.result === undefined ? current.result : patch.result;
+  const updatedAt = nowIso();
+
   if ((await backend()) === "pg") {
     await pgQuery(
       `UPDATE agent_actions SET status = $1, result = $2::jsonb, error = $3, summary = $4, updated_at = $5 WHERE id = $6`,
-      [patch.status ?? current.status, result, patch.error === undefined ? current.error : patch.error, patch.summary ?? current.summary, nowIso(), id],
+      [nextStatus, result, nextError, nextSummary, updatedAt, id],
     );
   } else {
     dbRun(
       `UPDATE agent_actions SET status = ?, result = ?, error = ?, summary = ?, updated_at = ? WHERE id = ?`,
-      patch.status ?? current.status,
+      nextStatus,
       result,
-      patch.error === undefined ? current.error : patch.error,
-      patch.summary ?? current.summary,
-      nowIso(),
+      nextError,
+      nextSummary,
+      updatedAt,
       id,
     );
   }
-  return getAction(id);
+  return {
+    ...current,
+    status: nextStatus,
+    result: nextResultObj,
+    error: nextError,
+    summary: nextSummary,
+    updatedAt,
+  };
 }
 
 export async function writeAudit(input: {
