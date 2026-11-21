@@ -38,7 +38,8 @@ export default async function SignInPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const viewer = await getViewer();
-  if (viewer.kind !== "anon") redirect("/app");
+  // Only redirect real signed-in users; demo visitors must still be able to open /sign-in to log in with Google.
+  if (viewer.kind === "user") redirect("/app");
 
   const params = await searchParams;
   const next = params.next?.startsWith("/") ? params.next : "/app";
