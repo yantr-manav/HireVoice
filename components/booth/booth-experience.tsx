@@ -201,6 +201,7 @@ type SubmitResult = {
   piiRedactedCount: number;
   usedFallback: boolean;
   reviewUrl: string;
+  demoReviewUrl?: string;
   reportUrl: string;
 };
 
@@ -1650,6 +1651,28 @@ export function BoothExperience({
                         </div>
                       </div>
 
+                      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
+                        {submitResult.candidate.score.items.map((item) => (
+                          <div
+                            key={item.id}
+                            className="rounded-[7px] border border-white/10 bg-booth/60 px-2.5 py-2"
+                          >
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="text-mist/60">{item.label}</span>
+                              <span className="font-mono font-semibold text-[#7ee2b8]">
+                                {item.value.toFixed(1)}/5
+                              </span>
+                            </div>
+                            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className="h-full rounded-full bg-glow"
+                                style={{ width: `${Math.min(100, (item.value / 5) * 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
                       <div className="mt-3 space-y-1.5 border-t border-white/10 pt-3 text-[10.5px]">
                         {[
                           ["Model", submitResult.candidate.score.model],
@@ -1676,10 +1699,10 @@ export function BoothExperience({
                     {submitResult ? (
                       <>
                         <Button variant="booth" size="lg" asChild>
-                          <Link href={submitResult.reviewUrl}>
+                          <a href={submitResult.demoReviewUrl ?? `/api/demo/enter?next=${encodeURIComponent(submitResult.reviewUrl)}`}>
                             <ExternalLink className="h-4 w-4" />
-                            Open live Evidence Timeline (Recruiter Desk)
-                          </Link>
+                            Open live Evidence Timeline (Meera Demo Desk)
+                          </a>
                         </Button>
                         <Button variant="ghost" size="md" className="border border-white/12 text-mist/80 hover:bg-white/10" asChild>
                           <Link href={submitResult.reportUrl}>View candidate feedback report</Link>

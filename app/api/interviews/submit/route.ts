@@ -151,6 +151,7 @@ export async function POST(request: Request) {
         piiRedactedCount: scored.piiRedactedCount,
         usedFallback: scored.usedFallback,
         reviewUrl: `/app/roles/${roleId}/candidates/${id}`,
+        demoReviewUrl: `/api/demo/enter?next=${encodeURIComponent(`/app/roles/${roleId}/candidates/${id}`)}`,
         reportUrl: `/r/${id}`,
       },
       { headers: { "Cache-Control": "no-store" } },
