@@ -275,6 +275,8 @@ export function BoothExperience({
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const liveChunkTimerRef = useRef<number | null>(null);
+  const liveChunkBusyRef = useRef(false);
   const finalRef = useRef("");
   const interimRef = useRef("");
   const answeringRef = useRef(false);
@@ -351,6 +353,10 @@ export function BoothExperience({
     setSpeechAvailable(false);
     setCaptionError(null);
     audioChunksRef.current = [];
+    if (liveChunkTimerRef.current) {
+      window.clearInterval(liveChunkTimerRef.current);
+      liveChunkTimerRef.current = null;
+    }
     await start();
     try {
       if (navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined") {
@@ -365,11 +371,47 @@ export function BoothExperience({
         };
         recorder.start(250);
         mediaRecorderRef.current = recorder;
+
+        // Near-realtime Gemini Live Captions: every 2.8s while speaking, send the
+        // accumulated WebM buffer to Gemini 3.5 Flash Lite so captions update live
+        // even on Brave / Edge / Arc / firewalls where Web Speech is blocked!
+        liveChunkTimerRef.current = window.setInterval(async () => {
+          if (!answeringRef.current || pausedRef.current || liveChunkBusyRef.current) return;
+          if (audioChunksRef.current.length < 4) return;
+          liveChunkBusyRef.current = true;
+          try {
+            const cleanMime = (recorder.mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
+            const snap = new Blob(audioChunksRef.current, { type: cleanMime });
+            if (snap.size < 1800) return;
+            const form = new FormData();
+            form.append("audio", snap, "live.webm");
+            form.append("language", language);
+            const res = await fetch("/api/interviews/transcribe", { method: "POST", body: form });
+            if (!res.ok) return;
+            const data = (await res.json()) as {
+              ok?: boolean;
+              segments?: TranscriptSegment[];
+              usedFallback?: boolean;
+            };
+            if (data.ok && !data.usedFallback && data.segments && data.segments.length > 0) {
+              const text = data.segments.map((s) => s.text).join(" ").trim();
+              if (text && answeringRef.current) {
+                finalRef.current = text;
+                setLiveText(text);
+                setInterimText("");
+              }
+            }
+          } catch {
+            /* non-fatal; final transcription still runs on Done */
+          } finally {
+            liveChunkBusyRef.current = false;
+          }
+        }, 2800);
       }
     } catch {
       setCaptionError("Could not access microphone — allow mic permission or switch to Type.");
     }
-  }, [start]);
+  }, [language, start]);
 
   const beginAnswer = useCallback(async () => {
     setElapsed(0);
@@ -474,6 +516,10 @@ export function BoothExperience({
     model?: string;
   }> => {
     answeringRef.current = false;
+    if (liveChunkTimerRef.current) {
+      window.clearInterval(liveChunkTimerRef.current);
+      liveChunkTimerRef.current = null;
+    }
     recognitionRef.current?.stop();
     recognitionRef.current = null;
     // Keep the mic warm across questions so clicking Answer on the next question
@@ -491,8 +537,8 @@ export function BoothExperience({
 
     const blob = await new Promise<Blob | null>((resolve) => {
       const onStop = () => {
-        const mime = recorder.mimeType || "audio/webm";
-        const out = audioChunksRef.current.length > 0 ? new Blob(audioChunksRef.current, { type: mime }) : null;
+        const cleanMime = (recorder.mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
+        const out = audioChunksRef.current.length > 0 ? new Blob(audioChunksRef.current, { type: cleanMime }) : null;
         resolve(out);
       };
       recorder.addEventListener("stop", onStop, { once: true });
@@ -503,10 +549,12 @@ export function BoothExperience({
       }
     });
 
-    // Fast path: if browser live captions already captured clean speech (>= 12 chars),
-    // advance immediately (<200ms). Otherwise (e.g. Brave/Arc/Safari/firewall where
-    // MediaRecorder captured audio), transcribe via Gemini 3.5 Flash Lite!
-    if (browserTranscript.length >= 12 || !blob || blob.size < 800) {
+    // Fast path: if browser live captions or user typing already captured clean text
+    // AND we didn't record audio in Gemini mode, return immediately.
+    if (typedDraft.trim().length > 0) {
+      return { transcript: typedDraft.trim() };
+    }
+    if (!blob || blob.size < 800) {
       return { transcript: browserTranscript };
     }
 
@@ -656,6 +704,7 @@ export function BoothExperience({
     // Handle multi-turn Angry Customer Role-Play on Q3
     if (question.kind === "roleplay" && !roleplayDone) {
       if (!cleaned) {
+        setCaptionError("We didn't capture your reply — please speak clearly or type in the box below, then press Send reply.");
         return;
       }
       const nextHistory: RoleplayTurn[] = [

@@ -91,6 +91,7 @@ export async function transcribeAudioWithGemini(input: {
         "Do not translate Hindi/Hinglish into English; preserve exact spoken phrasing.",
       ].join("\n");
 
+  const cleanMime = (input.mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
   const models = [...aiModels.small, ...aiModels.fast];
   let lastError = "No Gemini model succeeded";
 
@@ -107,7 +108,7 @@ export async function transcribeAudioWithGemini(input: {
             {
               role: "user",
               parts: [
-                { inlineData: { mimeType: input.mimeType || "audio/webm", data: input.audioBase64 } },
+                { inlineData: { mimeType: cleanMime, data: input.audioBase64 } },
                 { text: prompt },
               ],
             },
@@ -158,6 +159,7 @@ export async function transcribeAudioWithGemini(input: {
         }
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+        console.warn(`[transcribe] ${model} (${entry.label}) failed: ${lastError.slice(0, 180)}`);
         recordUsage({
           ref: entry.ref,
           provider: entry.provider,

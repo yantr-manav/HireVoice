@@ -102,9 +102,10 @@ export function useSpeechRecognition(options: SpeechOptions = {}) {
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         setListening(false);
+        const cleanMime = (recorder.mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
         const blob =
           chunksRef.current.length > 0
-            ? new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" })
+            ? new Blob(chunksRef.current, { type: cleanMime })
             : null;
         if (!blob || blob.size < 800) {
           setInterim("");
