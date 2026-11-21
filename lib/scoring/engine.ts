@@ -91,7 +91,7 @@ export async function transcribeAudioWithGemini(input: {
         "Do not translate Hindi/Hinglish into English; preserve exact spoken phrasing.",
       ].join("\n");
 
-  const models = aiModels.fast;
+  const models = [...aiModels.small, ...aiModels.fast];
   let lastError = "No Gemini model succeeded";
 
   for (const model of models) {
@@ -100,6 +100,7 @@ export async function transcribeAudioWithGemini(input: {
       const started = Date.now();
       try {
         const ai = new GoogleGenAI({ apiKey: entry.key, httpOptions: { apiVersion: "v1beta" } });
+        const isThinking = model.startsWith("gemini-2.5-") || model.startsWith("gemini-3.");
         const response = await ai.models.generateContent({
           model,
           contents: [
@@ -113,7 +114,9 @@ export async function transcribeAudioWithGemini(input: {
           ],
           config: {
             temperature: 0.1,
+            maxOutputTokens: 1200,
             responseMimeType: "application/json",
+            ...(isThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
           },
         });
 

@@ -279,6 +279,7 @@ export function BoothExperience({
   const interimRef = useRef("");
   const answeringRef = useRef(false);
   const pausedRef = useRef(false);
+  const preferGeminiAudioRef = useRef(false);
   answeringRef.current = answering;
   pausedRef.current = paused;
   const {
@@ -345,6 +346,31 @@ export function BoothExperience({
 
   const totalSeconds = answers.reduce((sum, answer) => sum + answer.seconds, 0) + elapsed;
 
+  const startGeminiAudioFallback = useCallback(async () => {
+    preferGeminiAudioRef.current = true;
+    setSpeechAvailable(false);
+    setCaptionError(null);
+    audioChunksRef.current = [];
+    await start();
+    try {
+      if (navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined") {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = pickRecorderMime();
+        const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        recorder.ondataavailable = (ev) => {
+          if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+        };
+        recorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+        };
+        recorder.start(250);
+        mediaRecorderRef.current = recorder;
+      }
+    } catch {
+      setCaptionError("Could not access microphone — allow mic permission or switch to Type.");
+    }
+  }, [start]);
+
   const beginAnswer = useCallback(async () => {
     setElapsed(0);
     setLiveText("");
@@ -367,11 +393,14 @@ export function BoothExperience({
 
     if (textMode) return;
 
-    // IMPORTANT: Release any active getUserMedia stream from Mic Check FIRST!
-    // On Windows & Android Chrome, holding getUserMedia open simultaneously with
-    // webkitSpeechRecognition causes Chrome's speech recognizer to miss audio or
-    // fail silently. Giving SpeechRecognition exclusive mic access makes live
-    // captions instant and reliable (matching Vaani's voice desk).
+    // If browser speech service was already detected as unreachable (Brave / Arc / firewall),
+    // jump straight to Gemini Audio recording with zero error flash!
+    if (preferGeminiAudioRef.current) {
+      await startGeminiAudioFallback();
+      return;
+    }
+
+    // Release Mic Check getUserMedia stream so Chrome's SpeechRecognition has exclusive mic access.
     stop();
 
     const recognition = getRecognition(language);
@@ -394,7 +423,6 @@ export function BoothExperience({
         setLiveText(finalAccum);
         setInterimText(interimAccum);
 
-        // Pulse the canvas waveform smoothly on every recognized speech event
         const bars = barsRef.current;
         if (bars) {
           for (let i = 0; i < bars.length; i += 1) {
@@ -403,16 +431,25 @@ export function BoothExperience({
         }
       };
       recognition.onerror = (ev) => {
-        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        if (ev.error === "network" || ev.error === "service-not-allowed") {
+          // Seamlessly switch to MediaRecorder + Gemini Audio Transcription (works on ALL browsers & Wi-Fi!)
+          recognitionRef.current = null;
+          void startGeminiAudioFallback();
+          return;
+        }
+        if (ev.error === "not-allowed") {
           setCaptionError("Microphone permission blocked — allow mic access or switch to Type.");
         } else if (ev.error === "audio-capture") {
           setCaptionError("No microphone detected — check your mic or switch to Type.");
-        } else if (ev.error === "network") {
-          setCaptionError("Browser speech service unreachable — switch to Type.");
         }
       };
       recognition.onend = () => {
-        if (answeringRef.current && !pausedRef.current && recognitionRef.current === recognition) {
+        if (
+          answeringRef.current &&
+          !pausedRef.current &&
+          !preferGeminiAudioRef.current &&
+          recognitionRef.current === recognition
+        ) {
           try {
             recognition.start();
           } catch {
@@ -424,33 +461,13 @@ export function BoothExperience({
       try {
         recognition.start();
       } catch {
-        setSpeechAvailable(false);
+        await startGeminiAudioFallback();
       }
       return;
     }
 
-    // Fallback path for browsers without Web Speech (e.g. iOS Safari / Firefox):
-    // capture audio via MediaRecorder and transcribe via Gemini multimodal API.
-    setSpeechAvailable(false);
-    await start();
-    try {
-      if (navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined") {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mime = pickRecorderMime();
-        const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-        recorder.ondataavailable = (ev) => {
-          if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
-        };
-        recorder.onstop = () => {
-          stream.getTracks().forEach((t) => t.stop());
-        };
-        recorder.start(250);
-        mediaRecorderRef.current = recorder;
-      }
-    } catch {
-      setCaptionError("Could not access microphone — you can type your answer below.");
-    }
-  }, [language, start, textMode]);
+    await startGeminiAudioFallback();
+  }, [barsRef, language, startGeminiAudioFallback, stop, textMode]);
 
   const stopRecordingAndTranscribe = useCallback(async (): Promise<{
     transcript: string;
@@ -486,10 +503,10 @@ export function BoothExperience({
       }
     });
 
-    // Fast path: if live captions already captured clean speech (>= 12 chars), advance
-    // immediately (<200ms) instead of blocking 3–5s on audio upload. Use Gemini audio
-    // transcription automatically when browser captions are unavailable/empty (e.g. iOS Safari).
-    if (practice || browserTranscript.length >= 12 || !blob || blob.size < 1200) {
+    // Fast path: if browser live captions already captured clean speech (>= 12 chars),
+    // advance immediately (<200ms). Otherwise (e.g. Brave/Arc/Safari/firewall where
+    // MediaRecorder captured audio), transcribe via Gemini 3.5 Flash Lite!
+    if (browserTranscript.length >= 12 || !blob || blob.size < 800) {
       return { transcript: browserTranscript };
     }
 
@@ -1471,10 +1488,10 @@ export function BoothExperience({
                                 <span className="text-glow/90">{liveText ? " " : ""}{interimText}</span>
                               ) : null}
                               {!liveText && !interimText ? (
-                                <span className="text-mist/40">
+                                <span className="text-mist/55">
                                   {speechAvailable
                                     ? "Start speaking — your words appear here live…"
-                                    : "Speaking… Gemini will transcribe when you press Done."}
+                                    : "● Recording with Gemini Voice — speak naturally, then press Done/Send."}
                                 </span>
                               ) : null}
                             </p>
